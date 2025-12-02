@@ -23,6 +23,8 @@
 library(stringr)
 library(tidyr)
 library(ggalluvial)
+library(readxl)
+
 
 
 devtools::load_all(path = "../morantviz/")
@@ -103,7 +105,6 @@ g$graficar_barras_v(x = "respuesta")
 g$contar_variables(variables = c( "opinion_pm_delrio"), confint = F)$
   pegar_diccionario()$
   pegar_color()
-
 
 g$graficar_lollipops("respuesta")+
   tema_morant(base_family = "KuFam")+
@@ -373,3 +374,90 @@ g$pegar_diccionario()
 
 g$graficar_bloque(freq = "media")
 
+
+
+
+
+#Analizar MORENA -------------------------------
+#Heatmap de metodologia MORENA y grafico de conocimiento
+
+library(tidyverse)
+library(readxl)
+
+# 1. Cargar diseño y diccionario
+diseno <- read_rds("/Users/saulnoguez/Documents/GitHub/enc_chihuahua_nov2024/R/resultado_final_nov24.rda")
+diccionario <- read_xlsx("../enc_chihuahua_nov2024/Insumos/dicc_enc_chihuahua_nov2024.xlsx")
+
+# 2. Vector de personajes EXACTO como vienen en tus variables
+personajes <- c("cruz", "andrea")
+
+# 3. Variables de conocimiento
+vars_conocimiento <- c("conoce_per1_cruz", "conoce_per1_andrea")
+
+# 4. Tabla de puntos (tu tabla original)
+puntos <- tibble::tribble(
+  ~prefijo,               ~nombre,                 ~puntos, ~tipo,
+  "opinion_per1",         "Opinión positiva",      2,       "opinion",
+  "caract_per_honesto",   "Honestidad",            1.25,    "atributo",
+  "caract_per_cercano",   "Cercano a la gente",    0.25,    "atributo",
+  "caract_per_conocechi", "Conoce el Estado",      0.25,    "atributo",
+  "caract_per_cumple",    "Cumple",                0.25,    "atributo",
+  "tipo_candidato",       "Buen candidato",        1,       "opinion",
+  "voto_fut",             "Votaría",               2,       "opinion",
+  "candidato_gb_27",      "Preferencia declarada", 3,       "preferencia"
+)
+
+# 5. Instanciar Graficar
+g <- Graficar$new(
+  diseno          = diseno,
+  diccionario     = diccionario,
+  colores         = colores,
+  color_principal = "pink",
+  tema            = tema_morant()
+)
+
+#quitar el problema del diseño
+options(survey.lonely.psu = "adjust")
+
+
+resultado <- g$analizar_morena(
+  personajes        = c("cruz","andrea"),
+  puntos            = puntos,
+  vars_conocimiento = c("conoce_per1_cruz","conoce_per1_andrea"),
+  nombres_completos = c("Cruz Pérez Cuéllar","Andrea Chávez")
+)
+
+resultado$tabla
+resultado$larga
+resultado$grafico
+
+# Graficos conocimiento morena -------------------------------
+#Este requiere que se haya corrido todo ANALIZAR MORENA
+resultado$grafico_conocimiento
+
+
+# Hacer mapas municipales -------------------------------
+# 1. Cargar base ENVIPE
+load("Insumo_mapa/BD_ENVIPE_2025.RData")
+# Esto carga TPer_Vic2 directamente
+
+# Creamos la g pero, en este caso, usando la base de envipe en lugar de la normal.
+g <- Graficar$new(
+  bd = TPer_Vic2,
+  diccionario = dicc,
+  colores = colores,
+  color_principal = "pink",
+  tema = tema_morant()
+)
+
+g$mapear_municipios(
+  entidad = "12",  # Ajustamos entidad
+  variable = "AP6_4_04", #Colocamos la variable a graficar
+  valor = "1", #El resultado que queremos visualizar
+  titulo_leyenda = "La intensidad del color muestra los municipios\nde menor a mayor participación", #Leyenda, no cambia
+  tipo = "continuo",
+  var_entidad = "CVE_ENT", #Variable que contiene las claves de entidad
+  var_municipio = "CVE_MUN", #Variable que contiene las claves de
+  low  = "grey80", #Color bajo
+  high = "#611232" #Color alto
+)

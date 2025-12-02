@@ -1,3 +1,33 @@
+#Función para cargar shapes (Funciona para el metodo de generar mapas)
+#Primero funcion que te carga los shapes
+cargar_shp_entidad <- function(entidad,
+                               base_path = "~/Google Drive/Unidades compartidas/Morant Consultores/Insumos/INE/SHP/2024") {
+
+  entidad2 <- sprintf("%02d", as.numeric(entidad))
+
+  dirs <- list.dirs(base_path, recursive = FALSE, full.names = TRUE)
+
+  carpeta_ent <- dirs[grepl(paste0("^", entidad2, " "), basename(dirs))]
+
+  if (length(carpeta_ent) == 0) {
+    stop(paste("No se encontró carpeta para la entidad", entidad))
+  }
+
+  shp_path <- file.path(carpeta_ent, "MUNICIPIO.shp")
+
+  if (!file.exists(shp_path)) {
+    stop(paste("No existe MUNICIPIO.shp en", carpeta_ent))
+  }
+
+  shp <- sf::read_sf(shp_path) |>
+    janitor::clean_names() |>
+    dplyr::mutate(
+      municipio_tmp = sprintf("%02d", as.numeric(municipio))
+    )
+
+  return(shp)
+}
+
 #' Clase R6 Graficar
 #'
 #' Clase base para construir tablas, manipular respuestas y generar
@@ -55,6 +85,9 @@ Graficar <- R6::R6Class(
     color_principal = NULL,
     #' @field tema Tema de `ggplot` a aplicar en las gráficas.
     tema = NULL,
+    #' @field mapa Objeto ggplot con el último mapa generado
+    mapa = NULL,
+
 
     #' Inicializar objeto Graficar
     #'
@@ -841,9 +874,544 @@ Graficar <- R6::R6Class(
         )
 
       return(self$grafica)
-    }
-  )
+    },
+
+
+#' Quitar filas con NA.
+
+  #' @return Actualiza `self$tbl` filtrando las observaciones no seleccionadas.
+  #' @examples
+  #' g$contar_variables(vars)$quitar_na)$graficar_lollipops("respuesta")
+    quitar_na = function() {
+    self$tbl <- self$tbl |> 
+    dplyr::filter(!is.na(respuesta)) |> 
+    dplyr::mutate(respuesta = forcats::fct_drop(respuesta))
+  invisible(self)
+},
+
+# MAPAS
+mapear_municipios = function(entidad = NULL,
+                             variable = NULL,
+                             valor = NULL,
+                             base_persona = NULL,
+                             var_entidad = "CVE_ENT",
+                             var_municipio = "CVE_MUN",
+                             titulo_leyenda = "Total",
+                             tipo = "continuo",
+                             low = "#e5f5f9",
+                             high = "#611232") {
+
+
+
+  # 1. Base a usar
+  if (is.null(base_persona)) {
+    base <- self$bd
+  } else {
+    base <- base_persona
+  }
+
+  # 2. Cargar shape automáticamente
+  if (is.null(entidad)) stop("Debes especificar una entidad, ej. '09'")
+  shp <- cargar_shp_entidad(entidad)  # <--- AQUÍ SE CARGA SOLO
+
+  # 3. Filtrar base
+  if (!is.null(var_entidad)) {
+    base <- base |>
+      dplyr::filter(.data[[var_entidad]] == entidad)
+  }
+
+  if (!is.null(variable) && !is.null(valor)) {
+    base <- base |>
+      dplyr::filter(.data[[variable]] == valor)
+  }
+
+  # 4. Clave municipal estandarizada
+  base <- base |>
+    dplyr::mutate(
+      municipio_tmp = sprintf("%02d", as.numeric(.data[[var_municipio]]))
+    )
+
+  # 5. Resumen
+  resumen <- dplyr::count(base, municipio_tmp)
+
+  # 6. Unión con shape
+  mapa <- shp |>
+    dplyr::left_join(resumen, by = "municipio_tmp")
+
+  # 7. Graficar
+  p <- ggplot2::ggplot(mapa, ggplot2::aes(fill = n)) +
+    ggplot2::geom_sf(color = "white", size = 0.1) +
+    ggplot2::theme_void() +
+    ggplot2::theme(
+  legend.position = "bottom",
+  legend.title.position = "top",
+  legend.title = element_text(hjust = 0.5),   # Centrar título
+  legend.text  = element_text(hjust = 0.5),   # Centrar texto
+  legend.justification = "center",             # Centrar caja de leyenda
+  legend.box.just = "center",                  # Centrar caja cuando hay varias líneas
+  legend.box = "horizontal"                    # Mantener barra horizontal
 )
+
+if (tipo == "continuo") {
+
+  # Escala continua (gradiente)
+  p <- p +
+    ggplot2::scale_fill_gradient(
+      low = low,
+      high = high,
+      na.value = "gray80",
+      name = titulo_leyenda,
+      guide = ggplot2::guide_colourbar(
+        title.position = "top",
+        title.hjust = 0.5
+      )
+    )
+
+} else if (tipo == "discreto") {
+
+  # Crear categorías (quintiles por default)
+  mapa$n_cat <- cut(
+    mapa$n,
+    breaks = quantile(mapa$n, probs = seq(0, 1, by = 0.2), na.rm = TRUE),
+    include.lowest = TRUE
+  )
+
+  p <- ggplot2::ggplot(mapa, ggplot2::aes(fill = n_cat)) +
+    ggplot2::geom_sf(color = "white", size = 0.1) +
+    ggplot2::scale_fill_brewer(
+      palette = "Reds",
+      name = titulo_leyenda
+    )
+}
+
+
+  # 8. Guardar resultado
+  self$mapa <- p
+  invisible(self)
+},
+
+analizar_morena = function(
+  personajes,
+  puntos,
+  vars_conocimiento,
+  nombres_completos = NULL,
+  etiquetas_preferencia = NULL
+) {
+
+  ###############################################################
+  # 0) DICCIONARIO UNIFICADO Y LIMPIO
+  ###############################################################
+  diccionario <- self$diccionario |>
+    janitor::clean_names()
+
+  col_codigo <- names(diccionario)[names(diccionario) %in%
+                                     c("llaves","codigo","variable","var","id","columna","nombre_var")][1]
+
+  if (is.na(col_codigo)) {
+    stop("No se encontró ninguna columna de códigos en el diccionario.")
+  }
+
+  diccionario <- diccionario |>
+    dplyr::rename(codigo = !!rlang::sym(col_codigo)) |>
+    dplyr::mutate(
+      codigo = stringr::str_squish(as.character(codigo))
+    )
+
+  self$diccionario <- diccionario
+
+  ###############################################################
+  # 0.1) NOMBRES COMPLETOS
+  ###############################################################
+  if (is.null(nombres_completos)) {
+    nombres_completos <- stringr::str_to_title(personajes)
+  }
+  if (length(nombres_completos) != length(personajes)) {
+    stop("nombres_completos debe tener la misma longitud que personajes.")
+  }
+
+  ###############################################################
+  # 1) CONSTRUCCIÓN DE VARIABLES
+  ###############################################################
+  # Opinión positiva
+  pref_opinion <- puntos |> 
+    dplyr::filter(nombre == "Opinión positiva") |> 
+    dplyr::pull(prefijo)
+
+  vars_opinion <- paste(pref_opinion, personajes, sep = "_")
+
+  # Atributos
+  atributos <- puntos |> 
+    dplyr::filter(tipo == "atributo") |> 
+    dplyr::select(prefijo, nombre, peso_atrib = puntos)
+
+  vars_atrib <- expand.grid(
+    prefijo   = atributos$prefijo,
+    personaje = personajes,
+    stringsAsFactors = FALSE
+  ) |>
+    dplyr::mutate(codigo = paste(prefijo, personaje, sep = "_")) |>
+    dplyr::pull(codigo)
+
+  # Buen candidato
+  pref_buenc <- puntos |> 
+    dplyr::filter(nombre == "Buen candidato") |> 
+    dplyr::pull(prefijo)
+
+  vars_buenc <- paste(pref_buenc, personajes, sep = "_")
+
+  # Votaría
+  pref_vot <- puntos |> 
+    dplyr::filter(nombre == "Votaría") |> 
+    dplyr::pull(prefijo)
+
+  vars_vot <- paste(pref_vot, personajes, sep = "_")
+
+  # Preferencia declarada
+  pref_pref <- puntos |> 
+    dplyr::filter(tipo == "preferencia") |> 
+    dplyr::pull(prefijo)
+
+  vars_pref <- pref_pref
+
+  vars_todas <- c(
+    vars_opinion,
+    vars_atrib,
+    vars_buenc,
+    vars_vot,
+    vars_conocimiento,
+    vars_pref
+  )
+
+  ###############################################################
+  # 2) VALIDAR VARIABLES EN DISEÑO
+  ###############################################################
+  vars_en_diseno <- names(self$diseno$variables)
+
+  faltan <- setdiff(vars_todas, vars_en_diseno)
+  if (length(faltan) > 0) {
+    stop("Variables NO presentes en diseño: ", paste(faltan, collapse = ", "))
+  }
+
+  ###############################################################
+  # 3) OPINIÓN POSITIVA
+  ###############################################################
+  self$contar_variables(vars_opinion, confint = FALSE)
+  self$filtrar_respuesta(variable = NULL, valor = "Buena")
+  self$pegar_diccionario()
+
+  opinion <- self$tbl |> dplyr::mutate(nombre = "Opinión positiva")
+
+  ###############################################################
+  # 4) ATRIBUTOS
+  ###############################################################
+  self$contar_variables(vars_atrib, confint = FALSE)
+  self$filtrar_respuesta(variable = NULL, valor = c("Mucho","Algo"))
+
+  self$tbl <- self$tbl |>
+    dplyr::mutate(
+      media = dplyr::if_else(respuesta == "Algo", media * 0.5, media)
+    ) |>
+    dplyr::summarise(media = sum(media), .by = codigo)
+
+  self$pegar_diccionario()
+
+  frecuencia_atributos <- self$tbl |>
+    dplyr::mutate(
+      respuesta = "Mucho/Algo (ponderado)",
+      prefijo = stringr::str_match(
+        codigo,
+        paste(atributos$prefijo, collapse = "|")
+      ) |> as.vector()
+    ) |>
+    dplyr::left_join(atributos, by = "prefijo")
+
+  ###############################################################
+  # 5) BUEN CANDIDATO
+  ###############################################################
+  self$contar_variables(vars_buenc, confint = FALSE)
+  self$filtrar_respuesta(variable = NULL, valor = "Sí")
+  self$pegar_diccionario()
+
+  buen_candidato <- self$tbl |>
+    dplyr::mutate(nombre = "Buen candidato")
+
+  ###############################################################
+  # 6) VOTARÍA
+  ###############################################################
+  self$contar_variables(vars_vot, confint = FALSE)
+  self$filtrar_respuesta(variable = NULL, valor = "Sí votaría")
+  self$pegar_diccionario()
+
+  votaria <- self$tbl |> dplyr::mutate(nombre = "Votaría")
+
+  ###############################################################
+  # 7) PREFERENCIA DECLARADA
+  ###############################################################
+  self$contar_variables(vars_pref, confint = FALSE)
+  self$pegar_diccionario()
+
+  respuestas_validas <- self$tbl$respuesta[
+    purrr::map_lgl(
+      self$tbl$respuesta,
+      ~ any(stringr::str_detect(
+        stringr::str_to_lower(.x),
+        stringr::str_to_lower(personajes)
+      ))
+    )
+  ] |> unique()
+
+  self$filtrar_respuesta(variable = NULL, valor = respuestas_validas)
+
+  preferencia <- self$tbl |>
+    dplyr::mutate(
+      nombre   = "Preferencia declarada",
+      atributo = "preferencia",
+      tema     = respuesta
+    )
+
+  ###############################################################
+  # 8) UNIÓN GENERAL
+  ###############################################################
+  todo <- opinion |>
+    dplyr::bind_rows(frecuencia_atributos |> dplyr::select(-peso_atrib)) |>
+    dplyr::bind_rows(buen_candidato) |>
+    dplyr::bind_rows(votaria) |>
+    dplyr::bind_rows(preferencia) |>
+    dplyr::filter(!is.na(nombre), !is.na(media)) |>
+    dplyr::mutate(
+      tema = dplyr::case_when(
+        stringr::str_detect(codigo, paste0("_", personajes[1], "$")) ~ nombres_completos[1],
+        stringr::str_detect(codigo, paste0("_", personajes[2], "$")) ~ nombres_completos[2],
+        TRUE ~ tema
+      )
+    )
+
+  ###############################################################
+  # 9) CONOCIMIENTO
+  ###############################################################
+  conocimiento_tbl <- contar_vars_pesos(
+    variables = vars_conocimiento,
+    confint   = FALSE,
+    diseno    = self$diseno
+  ) |>
+    dplyr::filter(respuesta == "Sí lo conoce") |>
+    dplyr::summarise(conocimiento = sum(media), .by = codigo) |>
+    dplyr::mutate(
+      tema = dplyr::case_when(
+        stringr::str_detect(codigo, paste0("_", personajes[1], "$")) ~ nombres_completos[1],
+        stringr::str_detect(codigo, paste0("_", personajes[2], "$")) ~ nombres_completos[2],
+        TRUE ~ codigo
+      )
+    ) |>
+    dplyr::select(tema, conocimiento)
+
+  todo_con_conocimiento <- todo |>
+    dplyr::left_join(conocimiento_tbl, by = "tema") |>
+    dplyr::mutate(
+      conocimiento = tidyr::replace_na(conocimiento, 0),
+      media_con_conocimiento = ifelse(
+        nombre == "Preferencia declarada",
+        media,
+        media * conocimiento
+      )
+    )
+
+  ###############################################################
+  # 10) PUNTOS
+  ###############################################################
+  pesos <- puntos |> dplyr::select(nombre, peso = puntos)
+
+  todo_con_conocimiento <- todo_con_conocimiento |>
+    dplyr::left_join(pesos, by = "nombre") |>
+    dplyr::group_by(nombre) |>
+    dplyr::mutate(
+      ganador = media_con_conocimiento == max(media_con_conocimiento, na.rm = TRUE),
+      puntos  = ifelse(ganador, peso, 0)
+    ) |>
+    dplyr::ungroup()
+
+  tabla_morena <- todo_con_conocimiento |>
+    dplyr::group_by(tema) |>
+    dplyr::mutate(puntaje_final = sum(puntos, na.rm = TRUE)) |>
+    dplyr::ungroup()
+
+  ###############################################################
+  # 11) HEATMAP FINAL
+  ###############################################################
+  niveles_x <- c(
+    "Opinión positiva","Honestidad","Cercano a la gente",
+    "Conoce el Estado","Cumple","Buen candidato",
+    "Votaría","Preferencia declarada"
+  )
+
+  totales <- tabla_morena |>
+    dplyr::select(tema, puntaje_final) |> dplyr::distinct()
+
+  tabla_final <- todo_con_conocimiento |>
+    dplyr::select(tema, nombre, media_con_conocimiento) |>
+    dplyr::left_join(totales, by = "tema") |>
+    dplyr::mutate(
+      nombre = factor(nombre, levels = c(niveles_x, "Puntaje final"))
+    ) |>
+    dplyr::bind_rows(
+      totales |>
+        dplyr::transmute(
+          tema,
+          nombre = factor("Puntaje final", levels = c(niveles_x, "Puntaje final")),
+          media_con_conocimiento = NA_real_,
+          puntaje_final
+        )
+    )
+
+  grafico <- ggplot2::ggplot() +
+    ggplot2::geom_tile(
+      data = dplyr::filter(tabla_final, nombre != "Puntaje final"),
+      ggplot2::aes(x = nombre, y = tema, fill = media_con_conocimiento),
+      width = 1, height = 1,
+      show.legend = FALSE
+    ) +
+    ggfittext::geom_fit_text(
+      data = dplyr::filter(tabla_final, nombre != "Puntaje final"),
+      ggplot2::aes(
+        x = nombre, y = tema,
+        label = scales::percent(media_con_conocimiento, accuracy = 1)
+      ),
+      contrast = TRUE
+    ) +
+    ggplot2::geom_tile(
+      data = dplyr::filter(tabla_final, nombre == "Puntaje final"),
+      ggplot2::aes(x = nombre, y = tema),
+      fill = "white", width = 1, height = 1
+    ) +
+    ggfittext::geom_fit_text(
+      data = dplyr::filter(tabla_final, nombre == "Puntaje final"),
+      ggplot2::aes(
+        x = nombre, y = tema,
+        label = scales::number(puntaje_final, accuracy = 0.01)
+      ),
+      color = "black"
+    ) +
+    ggplot2::scale_fill_gradient(
+      low = "#fde0dd",
+      high = "#A6032F"
+    ) +
+    ggplot2::scale_x_discrete(expand = c(0, 0)) +
+    ggplot2::scale_y_discrete(expand = c(0, 0)) +
+    ggplot2::labs(x = NULL, y = NULL) +
+    ggplot2::theme_minimal(base_size = 13) +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+      panel.grid  = ggplot2::element_blank()
+    )
+
+  ###############################################################
+  # 12) GRÁFICO DE CONOCIMIENTO (TECHO)
+  ###############################################################
+  orden_atributos <- c(
+    "Honestidad",
+    "Cercano a la gente",
+    "Conoce el Estado",
+    "Cumple",
+    "Buen candidato",
+    "Votaría"
+  )
+
+  etiquetas_atributos <- c(
+    "Honestidad"          = "Honestidad",
+    "Cercano a la gente"  = "Cercano a la gente",
+    "Conoce el Estado"    = "Conoce\nel Estado",
+    "Cumple"              = "Cumple",
+    "Buen candidato"      = "Buen candidato",
+    "Votaría"             = "Votaría"
+  )
+
+  tabla_conocimiento <- todo_con_conocimiento |>
+    dplyr::filter(nombre %in% orden_atributos) |>
+    dplyr::mutate(
+      atributo = nombre,
+      tema     = as.character(tema)
+    )
+
+  conocimiento_df <- tabla_conocimiento |> 
+    dplyr::distinct(tema, conocimiento)
+
+  grafico_conocimiento <- ggplot2::ggplot(
+    tabla_conocimiento,
+    ggplot2::aes(
+      x     = factor(atributo, levels = orden_atributos),
+      y     = media_con_conocimiento,
+      group = tema,
+      color = atributo
+    )
+  ) +
+    ggplot2::geom_line(size = 1) +
+    ggplot2::geom_point(size = 4) +
+    ggplot2::geom_hline(
+      data = conocimiento_df,
+      ggplot2::aes(yintercept = conocimiento),
+      inherit.aes = FALSE,
+      color = "#c1121f",
+      linewidth = 1
+    ) +
+    ggplot2::geom_text(
+      data = conocimiento_df,
+      ggplot2::aes(
+        x     = 1,
+        y     = conocimiento,
+        label = "Conocimiento"
+      ),
+      color = "#c1121f",
+      vjust = -0.6,
+      hjust = 0,
+      size  = 4,
+      inherit.aes = FALSE
+    ) +
+    ggplot2::facet_wrap(~tema, nrow = 1) +
+    ggplot2::scale_y_continuous(
+      labels = scales::percent_format(accuracy = 1),
+      limits = c(0,1)
+    ) +
+    ggplot2::scale_color_manual(
+      values = c(
+        "Honestidad"          = "#880D1E",
+        "Cercano a la gente"  = "#DD2D4A",
+        "Conoce el Estado"    = "#004777",
+        "Cumple"              = "#F49CBB",
+        "Buen candidato"      = "#2274A5",
+        "Votaría"             = "#8ACDEA"
+      )
+    ) +
+    tema_morant() +
+    ggplot2::theme(
+      axis.text.x = ggplot2::element_blank(),
+      panel.grid.major.x = ggplot2::element_blank(),
+      legend.position = "bottom",
+      strip.text = ggplot2::element_text(size = 14)
+    ) +
+    ggplot2::labs(
+      x = NULL,
+      y = NULL,
+      color = "Aspectos evaluados"
+    )
+
+  ###############################################################
+  # SALIDA FINAL
+  ###############################################################
+  return(list(
+    tabla                = tabla_morena,
+    larga                = todo_con_conocimiento,
+    grafico              = grafico,
+    grafico_conocimiento = grafico_conocimiento
+  ))
+}
+
+
+
+
+) 
+) 
+
+
 
 #' Clase R6 Encuesta
 #'
@@ -934,81 +1502,6 @@ Encuesta <- R6::R6Class(
       }
 
       invisible(self)
-    },
-
-    #################
-
-    #' Graficar saldos de opinión y conocimiento
-    #'
-    #' @param sufijo_opinion Sufijo de variables de opinión.
-    #' @param cat_ns_nc Categorías de no sabe/no contesta.
-    #' @param sufijo_conoce Sufijo de variables de conocimiento.
-    #' @param cat_conoce Categorías de conocimiento.
-    #' @param actores Vector de actores a graficar.
-    #' @param positivas Categorías positivas.
-    #' @param negativas Categorías negativas.
-    #' @param regular Categoría regular.
-    #' @return Un objeto `patchwork` con tres gráficos.
-    saldos_opinion = function(sufijo_opinion, cat_ns_nc, sufijo_conoce, cat_conoce,
-                              actores, positivas, negativas, regular){
-
-      # --- Opinión ---
-      opinion <- paste(sufijo_opinion, actores, sep = "_")
-      super$
-        contar_variables(variables = opinion, confint = FALSE)$
-        filtrar_respuesta(valor = c(positivas, negativas, regular))$
-        pegar_diccionario()$
-        pegar_color()$
-        reordenar_columna(columna = "respuesta", tipo = "manual", c(positivas, regular, negativas))$
-        partir_regular(opcion = regular)$
-        cambiarSigno_freq(negativo = negativas)$
-        reordenar_columna(columna = "nombre", tipo = "suma")$
-        etiquetar_regular(regular = regular)
-
-      op <- super$graficar_barras_divergente(
-        regular = regular,
-        positivas = rev(positivas),
-        negativas = negativas
-      )
-
-      orden <- self$tbl$nombre |> levels()
-
-      # --- Conocimiento ---
-      conoce <- paste(sufijo_conoce, actores, sep = "_")
-      super$
-        contar_variables(variables = conoce, confint = FALSE)$
-        filtrar_respuesta(valor = cat_conoce)$
-        pegar_diccionario()$
-        pegar_color()$
-        reordenar_columna(columna = "nombre", tipo = "manual", orden)
-
-      conoc <- self$tbl |>
-        ggplot2::ggplot(ggplot2::aes(x = nombre, y = 1)) +
-        ggplot2::geom_tile(ggplot2::aes(fill = media), color = "white", show.legend = FALSE) +
-        ggfittext::geom_fit_text(ggplot2::aes(label = scales::percent(media, 1)), contrast = TRUE) +
-        ggplot2::coord_flip() +
-        ggplot2::labs(x = NULL, y = NULL, title = "Conocimiento") +
-        ggplot2::theme(axis.text = ggplot2::element_blank(),
-                       axis.ticks = ggplot2::element_blank()) +
-        ggplot2::theme_void() +
-        ggplot2::theme(text = ggplot2::element_text(family = "Poppins"))
-
-      # --- Ns/Nc ---
-      super$
-        contar_variables(variables = opinion, confint = FALSE)$
-        filtrar_respuesta(valor = cat_ns_nc)$
-        pegar_diccionario()$
-        pegar_color()$
-        reordenar_columna(columna = "nombre", tipo = "manual", orden)
-
-      ns_nc <- super$graficar_barras_h(x = "nombre") +
-        ggplot2::theme_void() +
-        ggplot2::labs(caption = NULL, title = "No sabe / No contesta") +
-        ggplot2::theme(text = ggplot2::element_text(family = "Poppins"))
-
-      # Combinar los tres gráficos en un patchwork
-      todo <- op + conoc + ns_nc + patchwork::plot_layout(ncol = 3, widths = c(3, 1, 1))
-      return(todo)
     }
   )
 )
