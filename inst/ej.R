@@ -19,7 +19,6 @@
 # Ejemplo -----------------------------------------------------------------
 
 #library(morantviz)
-
 library(stringr)
 library(tidyr)
 library(ggalluvial)
@@ -164,7 +163,6 @@ g$
   reordenar_columna(columna = "nombre", tipo = "suma")$
   etiquetar_regular(regular = "Regular")
 
-g$tbl
 op <- g$graficar_barras_divergente(regular = "Regular",
                                    positivas = c("Buena", "Muy buena"),
                                    negativas = c("Mala", "Muy mala"))
@@ -292,6 +290,8 @@ g$tbl
 
 
 diseno_demo$variables |> glimpse()
+
+
 # cruce -------------------------------------------------------------------
 
 g$contar_variables_porGrupos(variables = c("rango_edad"),
@@ -450,8 +450,9 @@ g <- Graficar$new(
   tema = tema_morant()
 )
 
+
 g$mapear_municipios(
-  entidad = "12",  # Ajustamos entidad
+  entidad = "16",  # Ajustamos entidad
   variable = "AP6_4_04", #Colocamos la variable a graficar
   valor = "1", #El resultado que queremos visualizar
   titulo_leyenda = "La intensidad del color muestra los municipios\nde menor a mayor participación", #Leyenda, no cambia
@@ -460,4 +461,9 @@ g$mapear_municipios(
   var_municipio = "CVE_MUN", #Variable que contiene las claves de
   low  = "grey80", #Color bajo
   high = "#611232" #Color alto
-)
+  )
+
+g$mapa
+
+####
+

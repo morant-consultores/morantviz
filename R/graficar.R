@@ -1214,6 +1214,8 @@ if (tipo == "continuo") {
   invisible(self)
 },
 
+
+#ANALIZAR MORENA ####
 analizar_morena = function(
   personajes,
   puntos,
@@ -1628,54 +1630,25 @@ analizar_morena = function(
     grafico_conocimiento = grafico_conocimiento
   ))
 }
-
-
-
-
 ) 
 ) 
 
-
-
-#' Clase R6 Encuesta
-#'
-#' Hereda de `Graficar` y permite generar saldos de opinión y gráficos
-#' combinados (opinión, conocimiento, Ns/Nc).
-#'
-#' @docType class
-#' @format R6Class object
-#' @export
-#'
-#' @examples
-#' \dontrun{
-#' g <- Encuesta$new(
-#'   diseno = encuesta_demo$muestra$diseno,
-#'   diccionario = dicc,
-#'   colores = colores,
-#'   color_principal = "pink",
-#'   tema = tema_morant()
-#' )
-#'
-#
-#' g$saldos_opinion(
-#'   sufijo_opinion = "opinion_pm",
-#'   cat_ns_nc = "Ns/Nc",
-#'   sufijo_conoce = "conoce_pm",
-#'   cat_conoce = "Sí",
-#'   actores = c("astiazaran", "delrio"),
-#'   positivas = c("Muy buena", "Buena"),
-#'   negativas = c("Mala", "Muy mala"),
-#'   regular = "Regular"
-#' )
-#' }
 
 Encuesta <- R6::R6Class(
   "Encuesta",
   inherit = Graficar,
+
   public = list(
-    #' Inicializa la clase Encuesta
-    #'
-    #' @inheritParams Graficar$initialize
+
+    ############################################################
+    # Heredar método preparar_divergente desde Graficar
+    ############################################################
+    preparar_divergente = Graficar$public_methods$preparar_divergente,
+
+
+    ############################################################
+    # Inicialización
+    ############################################################
     initialize = function(
       diseno = NULL,
       bd = NULL,
@@ -1684,23 +1657,27 @@ Encuesta <- R6::R6Class(
       color_principal,
       tema
     ) {
-      super$initialize(diseno, bd, diccionario, colores, color_principal, tema)
+      super$initialize(
+        diseno       = diseno,
+        bd           = bd,
+        diccionario  = diccionario,
+        colores      = colores,
+        color_principal = color_principal,
+        tema         = tema
+      )
     },
 
-    ################################### Función máximo  ###################################
 
-    #' Resalta el valor máximo de una métrica
-    #'
-    #' Esta función modifica la columna `color` de `self$tbl`, asignando
-    #' un color especial (`col_max`) a la fila que contiene el valor máximo
-    #' de la variable indicada en `freq`.
-
+    ############################################################
+    # MARCAR EL VALOR MÁXIMO
+    ############################################################
     color_maximo = function(col_max, freq = "media") {
+
       self$tbl <- self$tbl |>
         mutate(
-          color = dplyr::if_else(
-            !!rlang::sym(freq) == max(!!rlang::sym(freq)),
-            !!col_max,
+          color = if_else(
+            !!rlang::sym(freq) == max(!!rlang::sym(freq), na.rm = TRUE),
+            col_max,
             color
           )
         )
@@ -1708,51 +1685,31 @@ Encuesta <- R6::R6Class(
       invisible(self)
     },
 
-    ##############
 
-    ################################### función de degradado continuo ###################################
+    ############################################################
+    # DEGRADADO CONTINUO
+    ############################################################
+    degradado_continuo = function(colores_base, col_max = "", freq = "media") {
 
-    #' Asigna un degradado de colores continuo a una métrica
-    #'
-    #' Esta función aplica una escala de color continua a la columna indicada
-    #' en `freq` (por defecto "media"). Cada valor recibe un color interpolado
-    #' entre los colores definidos en `colores_base`.
-    #'
-    #' Opcionalmente, si se pasa un color en `col_max`, también se resalta el
-    #' valor máximo con ese color (utilizando `self$color_maximo`).
-    #'
-
-    degradado_continuo = function(colores_base, col_max = "", freq = 'media') {
       escala_color <- scales::col_numeric(
         palette = colores_base,
         domain = range(self$tbl[[freq]], na.rm = TRUE)
       )
 
-      #  Asignar color continuo a cada valor de 'media'
       self$tbl <- self$tbl |>
-        dplyr::mutate(color = escala_color(!!rlang::sym(freq)))
+        mutate(color = escala_color(!!rlang::sym(freq)))
 
-      # Color max
       if (col_max != "") {
-        self$color_maximo(col_max, freq = freq)
+        self$color_maximo(col_max, freq)
       }
 
       invisible(self)
     },
 
-    #################
 
-    #' Graficar saldos de opinión y conocimiento
-    #'
-    #' @param sufijo_opinion Sufijo de variables de opinión.
-    #' @param cat_ns_nc Categorías de no sabe/no contesta.
-    #' @param sufijo_conoce Sufijo de variables de conocimiento.
-    #' @param cat_conoce Categorías de conocimiento.
-    #' @param actores Vector de actores a graficar.
-    #' @param positivas Categorías positivas.
-    #' @param negativas Categorías negativas.
-    #' @param regular Categoría regular.
-    #' @return Un objeto `patchwork` con tres gráficos.
+    ############################################################
+    # SALDOS DE OPINIÓN
+    ############################################################
     saldos_opinion = function(
       sufijo_opinion,
       cat_ns_nc,
@@ -1763,86 +1720,76 @@ Encuesta <- R6::R6Class(
       negativas,
       regular
     ) {
-      # --- Opinión ---
+
+      # -----------------------------
+      # OPINIÓN
+      # -----------------------------
       opinion <- paste(sufijo_opinion, actores, sep = "_")
-      super$contar_variables(
-        variables = opinion,
-        confint = FALSE
-      )$filtrar_respuesta(
-        valor = c(positivas, negativas, regular)
-      )$pegar_diccionario()$pegar_color()$reordenar_columna(
-        columna = "respuesta",
-        tipo = "manual",
-        c(positivas, regular, negativas)
-      )$partir_regular(opcion = regular)$cambiarSigno_freq(
-        negativo = negativas
-      )$reordenar_columna(columna = "nombre", tipo = "suma")$etiquetar_regular(
-        regular = regular
-      )
+
+      super$contar_variables(opinion, confint = FALSE)$
+        filtrar_respuesta(valor = c(positivas, negativas, regular))$
+        pegar_diccionario()$
+        pegar_color()$
+        reordenar_columna("respuesta", "manual", c(positivas, regular, negativas))$
+        partir_regular(regular)$
+        cambiarSigno_freq(negativas)$
+        reordenar_columna("nombre", tipo = "suma")$
+        etiquetar_regular(regular)
 
       op <- super$graficar_barras_divergente(
-        regular = regular,
+        regular   = regular,
         positivas = rev(positivas),
         negativas = negativas
       )
 
-      orden <- self$tbl$nombre |> levels()
+      orden <- levels(self$tbl$nombre)
 
-      # --- Conocimiento ---
+
+      # -----------------------------
+      # CONOCIMIENTO
+      # -----------------------------
       conoce <- paste(sufijo_conoce, actores, sep = "_")
-      super$contar_variables(
-        variables = conoce,
-        confint = FALSE
-      )$filtrar_respuesta(
-        valor = cat_conoce
-      )$pegar_diccionario()$pegar_color()$reordenar_columna(
-        columna = "nombre",
-        tipo = "manual",
-        orden
-      )
+
+      super$contar_variables(conoce, confint = FALSE)$
+        filtrar_respuesta(valor = cat_conoce)$
+        pegar_diccionario()$
+        pegar_color()$
+        reordenar_columna("nombre", tipo = "manual", orden)
 
       conoc <- self$tbl |>
-        ggplot2::ggplot(ggplot2::aes(x = nombre, y = 1)) +
-        ggplot2::geom_tile(
-          ggplot2::aes(fill = media),
-          color = "white",
-          show.legend = FALSE
-        ) +
+        ggplot(aes(x = nombre, y = 1)) +
+        geom_tile(aes(fill = media), color = "white") +
         ggfittext::geom_fit_text(
-          ggplot2::aes(label = scales::percent(media, 1)),
+          aes(label = scales::percent(media, 1)),
           contrast = TRUE
         ) +
-        ggplot2::coord_flip() +
-        ggplot2::labs(x = NULL, y = NULL, title = "Conocimiento") +
-        ggplot2::theme(
-          axis.text = ggplot2::element_blank(),
-          axis.ticks = ggplot2::element_blank()
-        ) +
-        ggplot2::theme_void() +
-        ggplot2::theme(text = ggplot2::element_text(family = "Poppins"))
+        coord_flip() +
+        theme_void() +
+        labs(title = "Conocimiento")
 
-      # --- Ns/Nc ---
-      super$contar_variables(
-        variables = opinion,
-        confint = FALSE
-      )$filtrar_respuesta(
-        valor = cat_ns_nc
-      )$pegar_diccionario()$pegar_color()$reordenar_columna(
-        columna = "nombre",
-        tipo = "manual",
-        orden
-      )
 
-      ns_nc <- super$graficar_barras_h(x = "nombre") +
-        ggplot2::theme_void() +
-        ggplot2::labs(caption = NULL, title = "No sabe / No contesta") +
-        ggplot2::theme(text = ggplot2::element_text(family = "Poppins"))
+      # -----------------------------
+      # NS/NC
+      # -----------------------------
+      super$contar_variables(opinion, confint = FALSE)$
+        filtrar_respuesta(valor = cat_ns_nc)$
+        pegar_diccionario()$
+        pegar_color()$
+        reordenar_columna("nombre", tipo = "manual", orden)
 
-      # Combinar los tres gráficos en un patchwork
+      ns_nc <- super$graficar_barras_h("nombre") +
+        theme_void() +
+        labs(title = "No sabe / No contesta")
+
+
+      # -----------------------------
+      # PATCHWORK FINAL
+      # -----------------------------
       todo <- op +
         conoc +
         ns_nc +
         patchwork::plot_layout(ncol = 3, widths = c(3, 1, 1))
+
       return(todo)
     }
   )
