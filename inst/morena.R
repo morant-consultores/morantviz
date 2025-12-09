@@ -1,114 +1,199 @@
-library(readr)
-library(readxl)
-diseno_24 <- read_rds("../enc_chihuahua_nov2024/data/resultado_final_nov24.rda")
-dicc <- read_xlsx("../enc_chihuahua_nov2024/Insumos/dicc_enc_chihuahua_nov2024.xlsx")
+# Función MORENA (para probar desde fuera)
+################################### GRAFICO CONOCIMIENTO MORENA ###################################
 
-# diseno_24$variables |>
-#   as_tibble() |>
-#   select(contains("opinion"), contains("honesto"),
-#          contains("cercano"), contains("conoce"),
-#          contains("cumple"), contains("candidato"), contains("voto")) |>
-#   select(contains(c("andrea", "cruz"))) |>
-#   select(contains("estado"))
+graficar_morena <- function(tabla_larga,
+                            orden_atributos,
+                            etiquetas_atributos) {
+  
+  # -----------------------------
+  # 0. Homologar nombres
+  # -----------------------------
+  tabla_larga <- tabla_larga |>
+    mutate(
+      atributo = nombre,
+      tema = as.character(tema)
+    )
+  
+  # -----------------------------
+  # 1. QUITAR atributos no deseados
+  # -----------------------------
+  tabla_larga <- tabla_larga |>
+    filter(atributo %in% orden_atributos)
+  
+  # -----------------------------
+  # 2. Filtrar para graficar
+  # -----------------------------
+  base_plot <- tabla_larga |>
+    mutate(
+      atributo = factor(atributo, levels = orden_atributos),
+      etiqueta = etiquetas_atributos[as.character(atributo)]
+    )
+  
+  # -----------------------------
+  # 3. Colores correctos (6 atributos)
+  # -----------------------------
+  colores_lineas <- c(
+    "Honestidad" = "#880D1E",
+    "Cercano a la gente" = "#DD2D4A",
+    "Conoce el Estado" = "#004777",
+    "Cumple" = "#F49CBB",
+    "Buen candidato" = "#2274A5",
+    "Votaría" = "#8ACDEA"
+  )
+  
+  # -----------------------------
+  # 4. Línea horizontal del conocimiento 
+  # -----------------------------
+  conocimiento_df <- tabla_larga |>
+    distinct(tema, conocimiento)
+  
+  # -----------------------------
+  # 5. GRAFICO FINAL
+  # -----------------------------
+  g <- ggplot(base_plot, aes(
+    x = atributo,
+    y = media,
+    group = tema,
+    color = atributo
+  )) +
+    geom_line(size = 1) +
+    geom_point(size = 4) +
+    
+    # Línea de conocimiento por candidato
+    geom_hline(
+      data = conocimiento_df,
+      aes(yintercept = conocimiento),
+      inherit.aes = FALSE,
+      color = "#c1121f",
+      linewidth = 1
+    ) +
+    geom_text(
+      data = conocimiento_df,
+      aes(
+        x = 1,
+        y = conocimiento,
+        label = "Conocimiento"
+      ),
+      color = "#c1121f",
+      vjust = -0.6,
+      hjust = 0,
+      inherit.aes = FALSE,
+      size = 4
+    ) +
+    
+    facet_wrap(~tema, nrow = 1) +
+    scale_y_continuous(
+      labels = scales::percent_format(accuracy = 1),
+      limits = c(0, 1)
+    ) +
+    scale_color_manual(
+      values = colores_lineas,
+      breaks = orden_atributos,
+      labels = etiquetas_atributos
+    ) +
+    scale_x_discrete(
+      breaks = orden_atributos,
+      labels = etiquetas_atributos
+    ) +
+    tema_morant() +
+    theme(
+      axis.text.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      legend.position = "bottom",
+      strip.text = element_text(size = 14)
+    ) +
+    labs(
+      x = NULL,
+      y = NULL,
+      color = "Aspectos evaluados"
+    )
+  
+  return(g)
+}
 
-options(survey.lonely.psu="remove")
-g <- Graficar$new(diseno = diseno_24, diccionario = dicc |> rename(codigo = llaves), colores = colores,color_principal = "pink",
-             tema = tema_morant())
 
-# opinión -----------------------------------------------------------------
-op <- "opinion_per1"
-personajes <- c("cruz", "andrea")
+####
+####
+analizar_morena <- function(personajes,
+                            puntos,
+                            vars_conocimiento,
+                            diseno,
+                            diccionario,
+                            colores) {
 
-vars <- paste(op, personajes, sep = "_")
-g$contar_variables(variables = vars,confint = F)
+  ###############################################################
+  # 0) DICCIONARIO UNIFICADO Y LIMPIO
+  ###############################################################
+  diccionario <- diccionario |>
+    janitor::clean_names() |>
+    dplyr::rename(codigo = dplyr::matches("codigo|llaves")) |>
+    dplyr::mutate(
+      codigo = as.character(codigo) |> stringr::str_squish()
+    )
 
-g$filtrar_respuesta(valor = "Buena")
-g$pegar_diccionario()
-op_morena <- g$tbl |>
-  mutate(nombre = "Opinión")
+  ###############################################################
+  # 0.1) VALIDAR QUE VARIABLES EXISTEN EN EL DISEÑO
+  ###############################################################
+  vars_en_diseno <- names(diseno$variables)
 
-# atributos ---------------------------------------------------------------
+  # Construir las mismas variables que usará la función
+  pref_opinion <- puntos |> dplyr::filter(tipo == "opinion") |> dplyr::pull(prefijo)
+  vars_opinion <- paste(pref_opinion, rep(personajes, each = length(pref_opinion)), sep = "_")
 
+  atributos <- puntos |>
+    dplyr::filter(tipo == "atributo") |>
+    dplyr::select(prefijo, nombre, peso_atrib = puntos)
 
-atributos <- tibble(atributo = c("caract_per_honesto", "caract_per_cercano", "caract_per_conocechi", "caract_per_cumple"),
-                    puntos = c(1.25,.25,.25,.25),
-                    nombre = c("Honestidad","Cercano\na la\ngente", "Conoce el\nEstado", "Cumple"))
+  vars_atrib <- expand.grid(atributos$prefijo, personajes) |>
+    dplyr::mutate(var = paste(Var1, Var2, sep = "_")) |>
+    dplyr::pull(var)
 
-vars <- expand.grid(atributos$atributo, personajes) |>
-  mutate(var = paste(Var1, Var2, sep = "_")) |>
-  pull(var)
+  pref_buenc <- puntos |> dplyr::filter(nombre == "Buen candidato") |> dplyr::pull(prefijo)
+  vars_buenc <- paste(pref_buenc, personajes, sep = "_")
 
-g$contar_variables(variables = vars, confint = F)
-g$filtrar_respuesta(valor = c("Mucho", "Algo"))
+  pref_vot <- puntos |> dplyr::filter(nombre == "Votaría") |> dplyr::pull(prefijo)
+  vars_vot <- paste(pref_vot, personajes, sep = "_")
 
-g$tbl <- g$tbl |>
-  mutate(media = if_else(respuesta == "Algo", media *.5, media)) # agregar método dividir_respuesta
+  pref_pref <- puntos |> dplyr::filter(nombre == "Preferencia declarada") |> dplyr::pull(prefijo)
+  vars_pref <- pref_pref
 
-
-
-g$tbl <- g$tbl |>
-  summarise(media = sum(media), .by = codigo)  #agregar método agrupar_variable y sumar
-
-g$tbl
-g$pegar_diccionario()
-library(stringr)
-frecuencia_atributos <- g$tbl |>
-  mutate(atributo = str_match(codigo, atributos$atributo |>
-                                paste(collapse = "|")) |>
-           as.vector(), .before = 0) |>
-  left_join(atributos, join_by(atributo)) |>
-  mutate(puntos = if_else(media == max(media), puntos, 0), .by = atributo)
-
-frecuencia_atributos
-
-
-
-# buen candidato ----------------------------------------------------------
-buen_candidato <- "tipo_candidato"
-vars <- paste(buen_candidato, personajes, sep = "_")
-
-g$contar_variables(vars, confint = F)
-g$filtrar_respuesta(valor = "Sí")
-g$pegar_diccionario()
-
-buenC <- g$tbl |>
-  mutate(puntos = if_else(media == max(media), 1, 0),
-         nombre = "Buen candidato")
-
-
-# votaría? ----------------------------------------------------------------
-
-votaria <- "voto_fut"
-vars <- paste(votaria, personajes, sep = "_")
-g$contar_variables(vars, confint = F)
-
-g$filtrar_respuesta(valor = "Sí votaría")
-g$pegar_diccionario()
-
-vot <- g$tbl |>
-  mutate(puntos = if_else(media == max(media), 2, 0),
-         nombre = "Votaría"
-         )
-
-
-# preferencia -------------------------------------------------------------
-
-
-# todo --------------------------------------------------------------------
-
-todo <- op_morena |>
-  bind_rows(
-    frecuencia_atributos
-  ) |>
-  bind_rows(
-    buenC
-  ) |>
-  bind_rows(
-    vot
+  vars_todas <- c(
+    vars_opinion,
+    vars_atrib,
+    vars_buenc,
+    vars_vot,
+    vars_conocimiento,
+    vars_pref
   )
 
-todo |>
-  ggplot(aes(x = nombre, y = tema)) +
-  geom_tile(aes(fill = media), show.legend = F) +
-  ggfittext::geom_fit_text(aes(label = scales::percent(media,1)), contrast = T)
+  faltan_en_diseno <- setdiff(vars_todas, vars_en_diseno)
+  if (length(faltan_en_diseno) > 0) {
+    stop("Las siguientes variables no existen en diseno$variables:\n",
+         paste(faltan_en_diseno, collapse = ", "))
+  }
 
+  faltan_en_dicc <- setdiff(vars_todas, diccionario$codigo)
+  if (length(faltan_en_dicc) > 0) {
+    warning(
+      "Las siguientes variables no están en el diccionario$codigo:\n",
+      paste(faltan_en_dicc, collapse = ", "),
+      "\nSe podrán usar, pero no tendrán nombre legible en tablas."
+    )
+  }
+
+  ###############################################################
+  # 1) INSTANCIA GRAFICAR
+  ###############################################################
+  g <- Graficar$new(
+    diseno      = diseno,
+    diccionario = diccionario,
+    colores     = colores,
+    color_principal = "pink",
+    tema = tema_morant()
+  )
+  
+  # ... resto de tu función igual ...
+}
+
+########
+########
